@@ -27,19 +27,20 @@ interface Room {
   players: Player[];
   gameState: "lobby" | "playing" | "finished";
   currentQuestion: number;
+  timer?: NodeJS.Timeout;
 }
 
 interface Question {
   word: string;
-  blanks: number[];
-  answer: string[];
+  blanks: number;
+  answer: string;
 }
 
 // ゲームの状態管理
 const rooms = new Map<string, Room>();
 const questions: Question[] = [
-  { word: "一期一会", blanks: [1, 3], answer: ["期", "会"] },
-  { word: "七転八起", blanks: [0, 2], answer: ["七", "八"] },
+  { word: "一期一会", blanks: 1, answer: "会" },
+  { word: "七転八起", blanks: 0, answer: "八" },
   // ... 他の問題
 ];
 
@@ -48,7 +49,7 @@ io.on("connection", (socket) => {
   console.log("プレイヤー接続:", socket.id);
 
   // ルーム作成
-  socket.on("create-room", (playerName) => {
+  socket.on("create-room", (playerName: string) => {
     const roomCode = Math.random().toString(36).substr(2, 6).toUpperCase();
     const room: Room = {
       code: roomCode,
@@ -63,6 +64,8 @@ io.on("connection", (socket) => {
     socket.join(roomCode);
     // ルーム情報をクライアントに送信
     socket.emit("room-created", { roomCode, room });
+
+    console.log(`ルーム作成: ${roomCode} by ${playerName}`);
   });
 
   // ルーム参加
@@ -79,6 +82,13 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // 既に参加しているか確認
+    const alreadyJoined = room.players.some((p) => p.id === socket.id);
+    if (alreadyJoined) {
+      socket.emit("error", { message: "既に参加しています" });
+      return;
+    }
+
     room.players.push({ id: socket.id, name: playerName, score: 0 });
     socket.join(roomCode); // プレイヤーを特定のルームに入れる
 
@@ -86,13 +96,24 @@ io.on("connection", (socket) => {
   });
 
   // ゲーム開始
-  socket.on("start-game", (roomCode) => {
+  socket.on("start-game", (roomCode: string) => {
     const room = rooms.get(roomCode);
 
-    if (!room || room.host !== socket.id) return;
+    if (!room || room.host !== socket.id) {
+      socket.emit("error", { message: "ゲームを開始する権限がありません" });
+      return;
+    }
+
+    if (room.players.length < 1) {
+      socket.emit("error", { message: "プレイヤーが不足しています" });
+      return;
+    }
 
     room.gameState = "playing";
     room.currentQuestion = 0;
+
+    // 全プレイヤーのスコアをリセット
+    room.players.forEach((p) => (p.score = 0));
 
     io.to(roomCode).emit("game-started", {
       question: questions[0],
@@ -105,7 +126,7 @@ io.on("connection", (socket) => {
   });
 
   // 回答送信
-  socket.on("submit-answer", ({ roomCode, answer1, answer2 }) => {
+  socket.on("submit-answer", ({ roomCode, answer1 }) => {
     const room = rooms.get(roomCode);
     if (!room) return;
 
@@ -114,20 +135,17 @@ io.on("connection", (socket) => {
 
     if (!player) return;
 
-    const correct1 = answer1 === question.answer[0];
-    const correct2 = answer2 === question.answer[1];
+    const correct1 = answer1 === question.answer;
 
     let points = 0;
-    if (correct1 && correct2) {
+    if (correct1) {
       points = 30; // 完全正解
-    } else if (correct1 || correct2) {
-      points = 10; // 部分正解
     }
 
     player.score += points;
 
     socket.emit("answer-result", {
-      correct: correct1 && correct2,
+      correct: correct1,
       points,
       totalScore: player.score,
     });
@@ -135,13 +153,32 @@ io.on("connection", (socket) => {
 
   // 切断処理
   socket.on("disconnect", () => {
-    rooms.forEach((room, code) => {
-      room.players = room.players.filter((p) => p.id !== socket.id);
+    console.log("プレイヤー切断:", socket.id);
 
-      if (room.players.length === 0) {
-        rooms.delete(code);
-      } else {
-        io.to(code).emit("player-left", room);
+    rooms.forEach((room, code) => {
+      const playerIndex = room.players.findIndex((p) => p.id === socket.id);
+
+      if (playerIndex !== -1) {
+        const playerName = room.players[playerIndex].name;
+        room.players.splice(playerIndex, 1);
+
+        console.log(`${playerName} がルーム ${code} から退出`);
+
+        if (room.players.length === 0) {
+          // 全員退出したらルームを削除
+          if (room.timer) {
+            clearInterval(room.timer);
+          }
+          rooms.delete(code);
+          console.log(`ルーム ${code} を削除`);
+        } else {
+          // ホストが退出した場合、次のプレイヤーをホストに
+          if (room.host === socket.id && room.players.length > 0) {
+            room.host = room.players[0].id;
+            console.log(`新しいホスト: ${room.players[0].name}`);
+          }
+          io.to(code).emit("player-left", room);
+        }
       }
     });
   });
@@ -149,14 +186,25 @@ io.on("connection", (socket) => {
 
 // タイマー管理(各ルームで独立)
 function startQuestionTimer(roomCode: string): void {
+  const room = rooms.get(roomCode);
+  if (!room) return;
+
+  // 既存のタイマーがあればクリア
+  if (room.timer) {
+    clearInterval(room.timer);
+  }
+
   let timeLeft = 30;
 
-  const timer = setInterval(() => {
+  room.timer = setInterval(() => {
     timeLeft--;
     io.to(roomCode).emit("timer-update", timeLeft);
 
     if (timeLeft <= 0) {
-      clearInterval(timer);
+      if (room.timer) {
+        clearInterval(room.timer);
+        room.timer = undefined;
+      }
       nextQuestion(roomCode);
     }
   }, 1000);
@@ -190,4 +238,21 @@ function nextQuestion(roomCode: string): void {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`サーバー起動: http://localhost:${PORT}`);
+});
+
+// グレースフルシャットダウン
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received, closing server...");
+  server.close(() => {
+    console.log("Server closed");
+    process.exit(0);
+  });
+});
+
+process.on("SIGINT", () => {
+  console.log("SIGINT received, closing server...");
+  server.close(() => {
+    console.log("Server closed");
+    process.exit(0);
+  });
 });
