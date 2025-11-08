@@ -1,7 +1,7 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const cors = require("cors");
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import cors from "cors";
 
 const app = express();
 app.use(cors());
@@ -14,21 +14,43 @@ const io = new Server(server, {
   },
 });
 
+// 型定義
+interface Player {
+  id: string;
+  name: string;
+  score: number;
+}
+
+interface Room {
+  code: string;
+  host: string;
+  players: Player[];
+  gameState: "lobby" | "playing" | "finished";
+  currentQuestion: number;
+}
+
+interface Question {
+  word: string;
+  blanks: number[];
+  answer: string[];
+}
+
 // ゲームの状態管理
-const rooms = new Map();
-const questions = [
+const rooms = new Map<string, Room>();
+const questions: Question[] = [
   { word: "一期一会", blanks: [1, 3], answer: ["期", "会"] },
   { word: "七転八起", blanks: [0, 2], answer: ["七", "八"] },
   // ... 他の問題
 ];
 
+// 接続ハンドラ
 io.on("connection", (socket) => {
   console.log("プレイヤー接続:", socket.id);
 
   // ルーム作成
   socket.on("create-room", (playerName) => {
     const roomCode = Math.random().toString(36).substr(2, 6).toUpperCase();
-    const room = {
+    const room: Room = {
       code: roomCode,
       host: socket.id,
       players: [{ id: socket.id, name: playerName, score: 0 }],
@@ -126,7 +148,7 @@ io.on("connection", (socket) => {
 });
 
 // タイマー管理(各ルームで独立)
-function startQuestionTimer(roomCode) {
+function startQuestionTimer(roomCode: string): void {
   let timeLeft = 30;
 
   const timer = setInterval(() => {
@@ -140,7 +162,7 @@ function startQuestionTimer(roomCode) {
   }, 1000);
 }
 
-function nextQuestion(roomCode) {
+function nextQuestion(roomCode: string): void {
   const room = rooms.get(roomCode);
   if (!room) return;
 
