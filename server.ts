@@ -31,17 +31,106 @@ interface Room {
 }
 
 interface Question {
-  word: string;
-  blanks: number;
-  answer: string;
+  word: string; // 四字熟語
+  yomi: string; // 読み仮名
+  meaning: string; // 意味
+  blank: number; // 空欄の位置（0-3）
+  answer: string; // 正解の文字
 }
 
 // ゲームの状態管理
 const rooms = new Map<string, Room>();
+
+// 四字熟語の問題データ（意味付き）
 const questions: Question[] = [
-  { word: "一期一会", blanks: 1, answer: "会" },
-  { word: "七転八起", blanks: 0, answer: "八" },
-  // ... 他の問題
+  {
+    word: "猫耳万歳",
+    yomi: "ねこみみばんざい",
+    meaning:
+      "小さな喜びや可愛らしさを全力で称える様子。日常の些細な幸せを大事にする精神を表す。",
+    blank: 2,
+    answer: "万",
+  },
+  {
+    word: "空想電流",
+    yomi: "くうそうでんりゅう",
+    meaning:
+      "想像力が活発に流れ、アイデアが次々に生まれる状態。クリエイティブな活動の比喩。",
+    blank: 3,
+    answer: "流",
+  },
+  // {
+  //   word: "一期一会",
+  //   meaning: "一生に一度だけの機会。生涯に一度限りであること。",
+  //   blank: 3,
+  //   answer: "会",
+  // },
+  // {
+  //   word: "温故知新",
+  //   meaning: "古いことを研究して、そこから新しい知識や見解を得ること。",
+  //   blank: 1,
+  //   answer: "故",
+  // },
+  // {
+  //   word: "十人十色",
+  //   meaning: "人それぞれ好みや考え方が異なること。",
+  //   blank: 3,
+  //   answer: "色",
+  // },
+  // {
+  //   word: "七転八起",
+  //   meaning: "何度失敗してもくじけずに立ち上がること。",
+  //   blank: 2,
+  //   answer: "八",
+  // },
+  // {
+  //   word: "四面楚歌",
+  //   meaning: "周囲が敵や反対者ばかりで、孤立して援助が全くない状態。",
+  //   blank: 2,
+  //   answer: "楚",
+  // },
+  // {
+  //   word: "百花繚乱",
+  //   meaning: "多くの優れた人物や物事が一度に現れて、華やかな様子。",
+  //   blank: 2,
+  //   answer: "繚",
+  // },
+  // {
+  //   word: "一石二鳥",
+  //   meaning: "一つの行為で二つの利益を得ること。",
+  //   blank: 3,
+  //   answer: "鳥",
+  // },
+  // {
+  //   word: "三寒四温",
+  //   meaning: "冬季に寒い日が三日ほど続くと、その後四日ほど温暖な日が続く現象。",
+  //   blank: 2,
+  //   answer: "四",
+  // },
+  // {
+  //   word: "以心伝心",
+  //   meaning: "言葉を使わなくても、心から心へ気持ちが通じ合うこと。",
+  //   blank: 3,
+  //   answer: "心",
+  // },
+  // {
+  //   word: "因果応報",
+  //   meaning: "良い行いには良い報い、悪い行いには悪い報いがあるということ。",
+  //   blank: 2,
+  //   answer: "応",
+  // },
+  // {
+  //   word: "臥薪嘗胆",
+  //   meaning: "目的を達成するために苦労に耐え忍ぶこと。",
+  //   blank: 3,
+  //   answer: "胆",
+  // },
+  // {
+  //   word: "画竜点睛",
+  //   meaning: "物事を完成させる最後の大切な仕上げ。",
+  //   blank: 3,
+  //   answer: "睛",
+  // },
 ];
 
 // 接続ハンドラ
@@ -60,39 +149,74 @@ io.on("connection", (socket) => {
     };
 
     rooms.set(roomCode, room);
-    // ルームに参加
     socket.join(roomCode);
-    // ルーム情報をクライアントに送信
     socket.emit("room-created", { roomCode, room });
 
     console.log(`ルーム作成: ${roomCode} by ${playerName}`);
   });
 
   // ルーム参加
-  socket.on("join-room", ({ roomCode, playerName }) => {
+  socket.on(
+    "join-room",
+    ({ roomCode, playerName }: { roomCode: string; playerName: string }) => {
+      const room = rooms.get(roomCode);
+
+      if (!room) {
+        socket.emit("error", { message: "ルームが見つかりません" });
+        return;
+      }
+
+      if (room.players.length >= 4) {
+        socket.emit("error", { message: "ルームが満員です" });
+        return;
+      }
+
+      const alreadyJoined = room.players.some((p) => p.id === socket.id);
+      if (alreadyJoined) {
+        socket.emit("error", { message: "既に参加しています" });
+        return;
+      }
+
+      room.players.push({ id: socket.id, name: playerName, score: 0 });
+      socket.join(roomCode);
+
+      io.to(roomCode).emit("player-joined", room);
+
+      console.log(`${playerName} がルーム ${roomCode} に参加`);
+    }
+  );
+
+  // ルームから退出
+  socket.on("leave-room", (roomCode: string) => {
     const room = rooms.get(roomCode);
+    if (!room) return;
 
-    if (!room) {
-      socket.emit("error", { message: "ルームが見つかりません" });
-      return;
+    const playerIndex = room.players.findIndex((p) => p.id === socket.id);
+    if (playerIndex === -1) return;
+
+    const playerName = room.players[playerIndex].name;
+    room.players.splice(playerIndex, 1);
+    socket.leave(roomCode);
+
+    console.log(`${playerName} がルーム ${roomCode} から退出`);
+
+    if (room.players.length === 0) {
+      // 全員退出したらルームを削除
+      if (room.timer) {
+        clearInterval(room.timer);
+      }
+      rooms.delete(roomCode);
+      console.log(`ルーム ${roomCode} を削除`);
+    } else {
+      // ホストが退出した場合、次のプレイヤーをホストに
+      if (room.host === socket.id && room.players.length > 0) {
+        room.host = room.players[0].id;
+        console.log(`新しいホスト: ${room.players[0].name}`);
+      }
+      io.to(roomCode).emit("player-left", room);
     }
 
-    if (room.players.length >= 4) {
-      socket.emit("error", { message: "ルームが満員です" });
-      return;
-    }
-
-    // 既に参加しているか確認
-    const alreadyJoined = room.players.some((p) => p.id === socket.id);
-    if (alreadyJoined) {
-      socket.emit("error", { message: "既に参加しています" });
-      return;
-    }
-
-    room.players.push({ id: socket.id, name: playerName, score: 0 });
-    socket.join(roomCode); // プレイヤーを特定のルームに入れる
-
-    io.to(roomCode).emit("player-joined", room); // そのルームの全員にメッセージを送信
+    socket.emit("left-room");
   });
 
   // ゲーム開始
@@ -118,38 +242,51 @@ io.on("connection", (socket) => {
     io.to(roomCode).emit("game-started", {
       question: questions[0],
       questionNumber: 1,
-      totalQuestions: 8,
+      totalQuestions: questions.length,
     });
+
+    console.log(`ゲーム開始: ルーム ${roomCode}`);
 
     // タイマー開始
     startQuestionTimer(roomCode);
   });
 
-  // 回答送信
-  socket.on("submit-answer", ({ roomCode, answer1 }) => {
-    const room = rooms.get(roomCode);
-    if (!room) return;
+  // 回答送信（1文字のみ）
+  socket.on(
+    "submit-answer",
+    ({ roomCode, answer }: { roomCode: string; answer: string }) => {
+      const room = rooms.get(roomCode);
+      if (!room) return;
 
-    const question = questions[room.currentQuestion];
-    const player = room.players.find((p) => p.id === socket.id);
+      const question = questions[room.currentQuestion];
+      const player = room.players.find((p) => p.id === socket.id);
 
-    if (!player) return;
+      if (!player) return;
 
-    const correct1 = answer1 === question.answer;
+      // 正誤判定
+      const correct = answer === question.answer;
 
-    let points = 0;
-    if (correct1) {
-      points = 30; // 完全正解
+      let points = 0;
+      if (correct) {
+        points = 30; // 正解
+      }
+
+      player.score += points;
+
+      socket.emit("answer-result", {
+        correct,
+        points,
+        totalScore: player.score,
+        correctAnswer: question.answer, // 不正解の場合に正解を表示
+      });
+
+      console.log(
+        `${player.name} の回答: ${answer} → ${
+          correct ? "正解" : "不正解"
+        } (${points}点)`
+      );
     }
-
-    player.score += points;
-
-    socket.emit("answer-result", {
-      correct: correct1,
-      points,
-      totalScore: player.score,
-    });
-  });
+  );
 
   // 切断処理
   socket.on("disconnect", () => {
@@ -165,14 +302,12 @@ io.on("connection", (socket) => {
         console.log(`${playerName} がルーム ${code} から退出`);
 
         if (room.players.length === 0) {
-          // 全員退出したらルームを削除
           if (room.timer) {
             clearInterval(room.timer);
           }
           rooms.delete(code);
           console.log(`ルーム ${code} を削除`);
         } else {
-          // ホストが退出した場合、次のプレイヤーをホストに
           if (room.host === socket.id && room.players.length > 0) {
             room.host = room.players[0].id;
             console.log(`新しいホスト: ${room.players[0].name}`);
@@ -184,17 +319,16 @@ io.on("connection", (socket) => {
   });
 });
 
-// タイマー管理(各ルームで独立)
+// タイマー管理
 function startQuestionTimer(roomCode: string): void {
   const room = rooms.get(roomCode);
   if (!room) return;
 
-  // 既存のタイマーがあればクリア
   if (room.timer) {
     clearInterval(room.timer);
   }
 
-  let timeLeft = 30;
+  let timeLeft = 20;
 
   room.timer = setInterval(() => {
     timeLeft--;
@@ -216,20 +350,33 @@ function nextQuestion(roomCode: string): void {
 
   room.currentQuestion++;
 
-  if (room.currentQuestion >= 8) {
+  if (room.currentQuestion >= questions.length) {
     // ゲーム終了
     room.gameState = "finished";
+
+    const finalScores = room.players
+      .map((p) => ({ name: p.name, score: p.score }))
+      .sort((a, b) => b.score - a.score);
+
     io.to(roomCode).emit("game-finished", {
-      scores: room.players.map((p) => ({ name: p.name, score: p.score })),
+      scores: finalScores,
     });
+
+    console.log(`ゲーム終了: ルーム ${roomCode}`);
   } else {
     // 次の問題
     setTimeout(() => {
+      const room = rooms.get(roomCode);
+      if (!room) return;
+
       io.to(roomCode).emit("next-question", {
         question: questions[room.currentQuestion],
         questionNumber: room.currentQuestion + 1,
-        totalQuestions: 8,
+        totalQuestions: questions.length,
       });
+
+      console.log(`次の問題: ${room.currentQuestion + 1}/${questions.length}`);
+
       startQuestionTimer(roomCode);
     }, 2000);
   }
@@ -238,6 +385,7 @@ function nextQuestion(roomCode: string): void {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`サーバー起動: http://localhost:${PORT}`);
+  console.log(`問題数: ${questions.length}`);
 });
 
 // グレースフルシャットダウン
