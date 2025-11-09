@@ -53,11 +53,16 @@ let questionsCache: Question[] = [];
 // 問題をデータベースから読み込み
 async function loadQuestions() {
   try {
-    questionsCache = await prisma.question.findMany({
-      orderBy: {
-        id: "asc",
-      },
-    });
+    questionsCache = (
+      await prisma.question.findMany({
+        orderBy: {
+          id: "asc",
+        },
+      })
+    ).map((q) => ({
+      ...q,
+      yomi: q.yomi || "", // Provide a default value for 'yomi' if missing
+    }));
     console.log(`${questionsCache.length}件の問題を読み込みました`);
   } catch (error) {
     console.error("問題の読み込みに失敗:", error);
@@ -349,8 +354,9 @@ function nextQuestion(roomCode: string): void {
 }
 
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`サーバー起動: http://localhost:${PORT}`);
+  await loadQuestions();
   console.log(`問題数: ${questionsCache.length}`);
 });
 
