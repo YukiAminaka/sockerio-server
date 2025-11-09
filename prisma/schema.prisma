@@ -1,12 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
@@ -15,15 +8,16 @@ datasource db {
 }
 
 model Question {
-  id        Int      @id @default(autoincrement())
-  word      String   // 四字熟語
-  meaning   String   // 意味
-  blank     Int      // 空欄の位置（0-3）
-  answer    String   // 正解の文字
-  hint      String   // ヒント
-  difficulty String  @default("normal") // 難易度: easy, normal, hard
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         Int      @id @default(autoincrement())
+  word       String   // 四字熟語
+  yomi       String   @default("") // 読み仮名
+  meaning    String   // 意味
+  blank      Int      // 空欄の位置（0-3）
+  answer     String   // 正解の文字
+  hint       String   // ヒント
+  difficulty String   @default("normal") // 難易度: easy, normal, hard
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@index([difficulty])
 }
