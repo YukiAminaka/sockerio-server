@@ -2,6 +2,7 @@ import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
+import { PrismaClient } from "@prisma/client";
 
 const app = express();
 app.use(cors());
@@ -13,6 +14,8 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
   },
 });
+
+const prisma = new PrismaClient();
 
 // 型定義
 interface Player {
@@ -27,6 +30,7 @@ interface Room {
   players: Player[];
   gameState: "lobby" | "playing" | "finished";
   currentQuestion: number;
+  questionOrder: number[];
   timer?: NodeJS.Timeout;
 }
 
@@ -36,102 +40,55 @@ interface Question {
   meaning: string; // 意味
   blank: number; // 空欄の位置（0-3）
   answer: string; // 正解の文字
+  hint?: string; // ヒント
+  difficulty: string; // 難易度
 }
 
 // ゲームの状態管理
 const rooms = new Map<string, Room>();
 
-// 四字熟語の問題データ（意味付き）
-const questions: Question[] = [
-  {
-    word: "猫耳万歳",
-    yomi: "ねこみみばんざい",
-    meaning:
-      "小さな喜びや可愛らしさを全力で称える様子。日常の些細な幸せを大事にする精神を表す。",
-    blank: 2,
-    answer: "万",
-  },
-  {
-    word: "空想電流",
-    yomi: "くうそうでんりゅう",
-    meaning:
-      "想像力が活発に流れ、アイデアが次々に生まれる状態。クリエイティブな活動の比喩。",
-    blank: 3,
-    answer: "流",
-  },
-  // {
-  //   word: "一期一会",
-  //   meaning: "一生に一度だけの機会。生涯に一度限りであること。",
-  //   blank: 3,
-  //   answer: "会",
-  // },
-  // {
-  //   word: "温故知新",
-  //   meaning: "古いことを研究して、そこから新しい知識や見解を得ること。",
-  //   blank: 1,
-  //   answer: "故",
-  // },
-  // {
-  //   word: "十人十色",
-  //   meaning: "人それぞれ好みや考え方が異なること。",
-  //   blank: 3,
-  //   answer: "色",
-  // },
-  // {
-  //   word: "七転八起",
-  //   meaning: "何度失敗してもくじけずに立ち上がること。",
-  //   blank: 2,
-  //   answer: "八",
-  // },
-  // {
-  //   word: "四面楚歌",
-  //   meaning: "周囲が敵や反対者ばかりで、孤立して援助が全くない状態。",
-  //   blank: 2,
-  //   answer: "楚",
-  // },
-  // {
-  //   word: "百花繚乱",
-  //   meaning: "多くの優れた人物や物事が一度に現れて、華やかな様子。",
-  //   blank: 2,
-  //   answer: "繚",
-  // },
-  // {
-  //   word: "一石二鳥",
-  //   meaning: "一つの行為で二つの利益を得ること。",
-  //   blank: 3,
-  //   answer: "鳥",
-  // },
-  // {
-  //   word: "三寒四温",
-  //   meaning: "冬季に寒い日が三日ほど続くと、その後四日ほど温暖な日が続く現象。",
-  //   blank: 2,
-  //   answer: "四",
-  // },
-  // {
-  //   word: "以心伝心",
-  //   meaning: "言葉を使わなくても、心から心へ気持ちが通じ合うこと。",
-  //   blank: 3,
-  //   answer: "心",
-  // },
-  // {
-  //   word: "因果応報",
-  //   meaning: "良い行いには良い報い、悪い行いには悪い報いがあるということ。",
-  //   blank: 2,
-  //   answer: "応",
-  // },
-  // {
-  //   word: "臥薪嘗胆",
-  //   meaning: "目的を達成するために苦労に耐え忍ぶこと。",
-  //   blank: 3,
-  //   answer: "胆",
-  // },
-  // {
-  //   word: "画竜点睛",
-  //   meaning: "物事を完成させる最後の大切な仕上げ。",
-  //   blank: 3,
-  //   answer: "睛",
-  // },
-];
+// データベースから問題を取得してキャッシュ
+let questionsCache: Question[] = [];
+
+// 問題をデータベースから読み込み
+async function loadQuestions() {
+  try {
+    questionsCache = await prisma.question.findMany({
+      orderBy: {
+        id: "asc",
+      },
+    });
+    console.log(`${questionsCache.length}件の問題を読み込みました`);
+  } catch (error) {
+    console.error("問題の読み込みに失敗:", error);
+    questionsCache = [];
+  }
+}
+
+// 難易度別に問題を取得
+async function getQuestionsByDifficulty(difficulty: string) {
+  try {
+    return await prisma.question.findMany({
+      where: {
+        difficulty: difficulty,
+      },
+    });
+  } catch (error) {
+    console.error("問題の取得に失敗:", error);
+    return [];
+  }
+}
+
+// ランダムな問題順序を生成
+function generateRandomQuestionOrder(count: number): number[] {
+  const order = Array.from({ length: questionsCache.length }, (_, i) => i);
+  // Fisher-Yates シャッフル
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order.slice(0, Math.min(count, questionsCache.length));
+}
 
 // 接続ハンドラ
 io.on("connection", (socket) => {
@@ -146,6 +103,7 @@ io.on("connection", (socket) => {
       players: [{ id: socket.id, name: playerName, score: 0 }],
       gameState: "lobby",
       currentQuestion: 0,
+      questionOrder: [],
     };
 
     rooms.set(roomCode, room);
@@ -236,13 +194,17 @@ io.on("connection", (socket) => {
     room.gameState = "playing";
     room.currentQuestion = 0;
 
+    // ランダムな問題順序を生成（8問）
+    room.questionOrder = generateRandomQuestionOrder(8);
+
     // 全プレイヤーのスコアをリセット
     room.players.forEach((p) => (p.score = 0));
 
+    const firstQuestion = questionsCache[room.questionOrder[0]];
     io.to(roomCode).emit("game-started", {
-      question: questions[0],
+      question: firstQuestion,
       questionNumber: 1,
-      totalQuestions: questions.length,
+      totalQuestions: room.questionOrder.length,
     });
 
     console.log(`ゲーム開始: ルーム ${roomCode}`);
@@ -258,7 +220,7 @@ io.on("connection", (socket) => {
       const room = rooms.get(roomCode);
       if (!room) return;
 
-      const question = questions[room.currentQuestion];
+      const question = questionsCache[room.questionOrder[room.currentQuestion]];
       const player = room.players.find((p) => p.id === socket.id);
 
       if (!player) return;
@@ -350,7 +312,7 @@ function nextQuestion(roomCode: string): void {
 
   room.currentQuestion++;
 
-  if (room.currentQuestion >= questions.length) {
+  if (room.currentQuestion >= room.questionOrder.length) {
     // ゲーム終了
     room.gameState = "finished";
 
@@ -369,13 +331,17 @@ function nextQuestion(roomCode: string): void {
       const room = rooms.get(roomCode);
       if (!room) return;
 
+      const nextQuestion =
+        questionsCache[room.questionOrder[room.currentQuestion]];
       io.to(roomCode).emit("next-question", {
-        question: questions[room.currentQuestion],
+        question: nextQuestion,
         questionNumber: room.currentQuestion + 1,
-        totalQuestions: questions.length,
+        totalQuestions: room.questionOrder.length,
       });
 
-      console.log(`次の問題: ${room.currentQuestion + 1}/${questions.length}`);
+      console.log(
+        `次の問題: ${room.currentQuestion + 1}/${room.questionOrder.length}`
+      );
 
       startQuestionTimer(roomCode);
     }, 2000);
@@ -385,7 +351,7 @@ function nextQuestion(roomCode: string): void {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`サーバー起動: http://localhost:${PORT}`);
-  console.log(`問題数: ${questions.length}`);
+  console.log(`問題数: ${questionsCache.length}`);
 });
 
 // グレースフルシャットダウン
