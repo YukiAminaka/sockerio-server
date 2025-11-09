@@ -6,15 +6,6 @@ const prisma = new PrismaClient();
 
 const questions = [
   {
-    word: "一期一会",
-    yomi: "いちごいちえ",
-    meaning: "一生に一度だけの機会。生涯に一度限りであること。",
-    blank: 3,
-    answer: "会",
-    hint: "人と人が出会うこと",
-    difficulty: "easy",
-  },
-  {
     word: "猫耳万歳",
     yomi: "ねこみみばんざい",
     meaning:

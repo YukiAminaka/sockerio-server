@@ -235,7 +235,7 @@ io.on("connection", (socket) => {
 
       let points = 0;
       if (correct) {
-        points = 30; // 正解
+        points = 10; // 正解
       }
 
       player.score += points;
